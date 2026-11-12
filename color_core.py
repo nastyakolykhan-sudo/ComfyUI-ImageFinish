@@ -23,9 +23,15 @@ def _to_srgb(x):
     return torch.where(x <= 0.0031308, 12.92 * x, 1.055 * x.clamp_min(1e-12) ** (1 / 2.4) - 0.055)
 
 
+def _mat3(x, m):
+    """(..., 3) x 3x3 as elementwise sums: full float32 even where matmuls run in reduced precision (TF32 GPUs)."""
+    m = m.tolist()
+    return torch.stack([x[..., 0] * r[0] + x[..., 1] * r[1] + x[..., 2] * r[2] for r in m], -1)
+
+
 def rgb_to_lab(rgb):
     """(..., 3) sRGB 0-1 -> (..., 3) L* 0-100, a*, b*."""
-    xyz = _to_linear(rgb.clamp(0.0, 1.0)) @ _M_RGB2XYZ.to(rgb).T / _WHITE.to(rgb)
+    xyz = _mat3(_to_linear(rgb.clamp(0.0, 1.0)), _M_RGB2XYZ) / _WHITE.to(rgb)
     f = torch.where(xyz > _EPS, xyz.clamp_min(1e-12) ** (1 / 3), (_KAPPA * xyz + 16.0) / 116.0)
     return torch.stack([116.0 * f[..., 1] - 16.0, 500.0 * (f[..., 0] - f[..., 1]), 200.0 * (f[..., 1] - f[..., 2])], -1)
 
@@ -36,7 +42,7 @@ def lab_to_rgb(lab):
     f = torch.stack([fx, fy, fz], -1)
     xyz = torch.where(f ** 3 > _EPS, f ** 3, (116.0 * f - 16.0) / _KAPPA)
     xyz = torch.stack([xyz[..., 0], torch.where(lab[..., 0] > _KAPPA * _EPS, fy ** 3, lab[..., 0] / _KAPPA), xyz[..., 2]], -1)
-    return _to_srgb((xyz * _WHITE.to(lab)) @ _M_XYZ2RGB.to(lab).T)
+    return _to_srgb(_mat3(xyz * _WHITE.to(lab), _M_XYZ2RGB))
 
 
 @torch.no_grad()
@@ -46,6 +52,9 @@ def combine(brightness_from, color_from, chunk=8, device=None):
     Uses: keep an image's own brightness after a colour change (brightness_from = the original), or sharpen
     brightness only (brightness_from = the sharpened copy, color_from = the original). Frame i pairs with frame i; a
     batch of one is reused for every frame. Both images must be the same size.
+
+    Applied as a change on top of color_from (its pixels plus the difference that the new L* makes), so where the
+    brightness is the same the pixels come back exactly, with no conversion round-off.
     """
     if brightness_from.shape[1:3] != color_from.shape[1:3]:
         raise ValueError("Combine Brightness and Color: both images must be the same size "
@@ -55,7 +64,12 @@ def combine(brightness_from, color_from, chunk=8, device=None):
     outs = []
     for i in range(0, n, chunk):
         idx = range(i, min(n, i + chunk))
-        lb = rgb_to_lab(torch.stack([brightness_from[min(j, brightness_from.shape[0] - 1)] for j in idx]).to(device, torch.float32))
-        lc = rgb_to_lab(torch.stack([color_from[min(j, color_from.shape[0] - 1)] for j in idx]).to(device, torch.float32))
-        outs.append(lab_to_rgb(torch.cat([lb[..., :1], lc[..., 1:]], -1)).clamp(0.0, 1.0).to(color_from.device))
+        b = torch.stack([brightness_from[min(j, brightness_from.shape[0] - 1)] for j in idx]).to(device, torch.float32)
+        c = torch.stack([color_from[min(j, color_from.shape[0] - 1)] for j in idx]).to(device, torch.float32)
+        if torch.equal(b, c):
+            outs.append(c.to(color_from.device))
+            continue
+        lb, lc = rgb_to_lab(b), rgb_to_lab(c)
+        change = lab_to_rgb(torch.cat([lb[..., :1], lc[..., 1:]], -1)) - lab_to_rgb(lc)
+        outs.append((c + change).clamp(0.0, 1.0).to(color_from.device))
     return torch.cat(outs, 0)
