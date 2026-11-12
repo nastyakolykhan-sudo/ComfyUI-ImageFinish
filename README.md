@@ -1,7 +1,8 @@
 # ComfyUI-ImageFinish
 
-Small finishing nodes for ComfyUI: grain that follows brightness, brightness/colour recombination, optional-upload checks.
-batches (video frames).
+Small finishing nodes for ComfyUI: grain that follows brightness, brightness/colour recombination, and a check for
+empty optional uploads. Pure torch: no models, no extra pip packages. Works on single images and on batches (video
+frames).
 
 ## Smart Grain
 
