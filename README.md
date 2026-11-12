@@ -1,6 +1,6 @@
 # ComfyUI-ImageFinish
 
-Small finishing nodes for ComfyUI. Pure torch: no models, no extra pip packages. Works on single images and on
+Small finishing nodes for ComfyUI: grain that follows brightness, brightness/colour recombination, optional-upload checks.
 batches (video frames).
 
 ## Smart Grain
@@ -17,6 +17,14 @@ Film-like grain whose strength follows the brightness of the image.
 | contrast | How sharply strength changes from shadows to highlights: 0 = gradually across all tones, 1 = quickly around midpoint. |
 | midpoint | Brightness where strength is halfway between shadows and highlights. |
 | seed | Grain pattern. In a batch, frame i uses seed + i, so video gets moving grain. |
+| style (optional) | A preset for shadows, highlights, contrast, midpoint and color: Fine, Classic, Heavy, Even. Custom (default) uses the sliders. Amount, size and seed always apply. |
+
+| Style | Character |
+|---|---|
+| Fine | Subtle, almost monochrome, a light shadow/highlight split. |
+| Classic | Film-like: clearly more grain in the shadows than in the highlights. |
+| Heavy | Pushed film: gritty shadows, clean highlights, an abrupt change between them. |
+| Even | The same strength in every tone. |
 
 Outputs: `image`, and `grain_map` (MASK, white = strongest grain) for checking where the grain lands.
 
@@ -24,6 +32,16 @@ How it works: two layers of Gaussian-blurred noise (fine + a coarser one for clu
 strength, so Amount means the same thing at every Size. The strength per pixel comes from a tone curve of the local
 brightness (shadows → highlights, an S-curve whose steepness is `contrast`, centred on `midpoint`). Channel values
 close to pure black or white get proportionally less grain, so blacks are not lifted and whites are not dirtied.
+
+## Combine Brightness and Color
+
+The brightness of one image with the colour of another: CIELAB L* from `brightness_from`, a*/b* from `color_from`
+(same size; a batch of one is reused for every frame). Two common uses:
+
+- **Keep brightness after a colour change:** `brightness_from` = the original, `color_from` = the colour-matched
+  copy. The colours move, the light and contrast stay.
+- **Sharpen brightness only:** `brightness_from` = a sharpened copy, `color_from` = the original. Detail gets
+  sharper without coloured fringes on edges.
 
 ## Is Image Provided
 

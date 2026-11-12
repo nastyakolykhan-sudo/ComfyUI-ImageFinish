@@ -1,9 +1,27 @@
-"""ComfyUI-ImageFinish nodes: Smart Grain and Is Image Provided."""
+"""ComfyUI-ImageFinish nodes: Smart Grain, Combine Brightness and Color, Is Image Provided."""
 
+from .color_core import combine
 from .grain_core import apply_smart_grain
 
 # Upload nodes and the widget that holds their file name. An upload with an empty file name means "not given".
 _UPLOAD_NODES = {"WorkflowIOImageInput": "value", "LoadImage": "image"}
+
+# Grain styles: (shadows, highlights, contrast, midpoint, color). "Custom" uses the node's own sliders.
+GRAIN_STYLES = {
+    "Fine": (0.9, 0.45, 0.35, 0.5, 0.05),     # subtle, almost monochrome, light tonal split
+    "Classic": (1.0, 0.3, 0.5, 0.5, 0.15),    # film-like: clearly more in the shadows
+    "Heavy": (1.6, 0.15, 0.8, 0.45, 0.25),    # pushed film: gritty shadows, clean highlights
+    "Even": (1.0, 1.0, 0.5, 0.5, 0.1),        # the same strength in every tone
+}
+STYLE_OPTIONS = ["Custom"] + list(GRAIN_STYLES)
+
+
+def _devices(image):
+    try:
+        import comfy.model_management as mm
+        return mm.get_torch_device(), mm.intermediate_device()
+    except Exception:  # outside ComfyUI
+        return image.device, image.device
 
 
 class SmartGrain:
@@ -28,7 +46,12 @@ class SmartGrain:
                                                      "Highlights. Lower it to treat only the deepest tones as shadows."),
                 "seed": ("INT", {"default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF,
                                  "tooltip": "Grain pattern. In a batch or video, frame i uses seed + i."}),
-            }
+            },
+            "optional": {
+                "style": (STYLE_OPTIONS, {"default": "Custom",
+                                          "tooltip": "A preset for shadows, highlights, contrast, midpoint and color. "
+                                                     "Custom uses the sliders above; amount, size and seed always apply."}),
+            },
         }
 
     RETURN_TYPES = ("IMAGE", "MASK")
@@ -37,15 +60,36 @@ class SmartGrain:
     FUNCTION = "run"
     CATEGORY = "image/postprocessing"
 
-    def run(self, image, amount, size, color, shadows, highlights, contrast, midpoint, seed):
-        try:
-            import comfy.model_management as mm
-            device, out_device = mm.get_torch_device(), mm.intermediate_device()
-        except Exception:  # outside ComfyUI
-            device, out_device = image.device, image.device
+    def run(self, image, amount, size, color, shadows, highlights, contrast, midpoint, seed, style="Custom"):
+        if style in GRAIN_STYLES:
+            shadows, highlights, contrast, midpoint, color = GRAIN_STYLES[style]
+        device, out_device = _devices(image)
         out, grain_map = apply_smart_grain(image, amount, size, color, shadows, highlights, contrast, midpoint,
                                            seed, device=device, out_device=out_device)
         return (out, grain_map)
+
+
+class CombineBrightnessColor:
+    """The brightness of one image with the colour of another (CIELAB L* from one, a*/b* from the other).
+    Keep an image's own brightness after a colour change, or sharpen brightness only (no colour fringes)."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "brightness_from": ("IMAGE", {"tooltip": "Brightness (light and shadow, detail) comes from this image."}),
+                "color_from": ("IMAGE", {"tooltip": "Colour (hue and saturation) comes from this image. Same size."}),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("image",)
+    FUNCTION = "run"
+    CATEGORY = "image/postprocessing"
+
+    def run(self, brightness_from, color_from):
+        device, out_device = _devices(color_from)
+        return (combine(brightness_from, color_from, device=device).to(out_device),)
 
 
 class IsImageProvided:
@@ -85,5 +129,7 @@ class IsImageProvided:
         return (self._given(prompt, unique_id),)
 
 
-NODE_CLASS_MAPPINGS = {"SmartGrain": SmartGrain, "IsImageProvided": IsImageProvided}
-NODE_DISPLAY_NAME_MAPPINGS = {"SmartGrain": "Smart Grain", "IsImageProvided": "Is Image Provided"}
+NODE_CLASS_MAPPINGS = {"SmartGrain": SmartGrain, "CombineBrightnessColor": CombineBrightnessColor,
+                       "IsImageProvided": IsImageProvided}
+NODE_DISPLAY_NAME_MAPPINGS = {"SmartGrain": "Smart Grain", "CombineBrightnessColor": "Combine Brightness and Color",
+                              "IsImageProvided": "Is Image Provided"}
